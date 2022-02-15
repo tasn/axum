@@ -1,3 +1,12 @@
+use std::{convert::Infallible, fmt, marker::PhantomData};
+
+use axum::{
+    async_trait,
+    extract::{FromRequest, RequestParts},
+    handler::Handler,
+    routing::MethodRouter,
+};
+
 use super::sealed::Sealed;
 
 /// A type safe path.
@@ -128,6 +137,182 @@ pub trait TypedPath: std::fmt::Display {
     const PATH: &'static str;
 }
 
+/// TODO
+pub trait TypedMethod {
+    /// TODO
+    fn apply_method_router<H, B, T>(handler: H) -> MethodRouter<B>
+    where
+        H: Handler<T, B>,
+        B: Send + 'static,
+        T: 'static;
+
+    fn matches_method(method: &http::Method) -> bool;
+}
+
+macro_rules! typed_method {
+    ($name:ident, $method_router_constructor:ident, $method:ident) => {
+        /// TODO(david)
+        #[derive(Clone, Copy, Debug)]
+        pub struct $name;
+
+        impl TypedMethod for $name {
+            fn apply_method_router<H, B, T>(handler: H) -> MethodRouter<B>
+            where
+                H: Handler<T, B>,
+                B: Send + 'static,
+                T: 'static,
+            {
+                axum::routing::$method_router_constructor(handler)
+            }
+
+            fn matches_method(method: &http::Method) -> bool {
+                method == http::Method::$method
+            }
+        }
+
+        #[async_trait]
+        impl<B> FromRequest<B> for $name
+        where
+            B: Send,
+        {
+            type Rejection = http::StatusCode;
+
+            async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+                if Self::matches_method(req.method()) {
+                    Ok(Self)
+                } else {
+                    Err(http::StatusCode::NOT_FOUND)
+                }
+            }
+        }
+    };
+}
+
+typed_method!(Delete, delete, DELETE);
+typed_method!(Get, get, GET);
+typed_method!(Head, head, HEAD);
+typed_method!(Options, options, OPTIONS);
+typed_method!(Patch, patch, PATCH);
+typed_method!(Post, post, POST);
+typed_method!(Put, put, PUT);
+typed_method!(Trace, trace, TRACE);
+
+/// TODO
+#[derive(Debug, Clone, Copy)]
+pub struct Any;
+
+impl TypedMethod for Any {
+    fn apply_method_router<H, B, T>(handler: H) -> MethodRouter<B>
+    where
+        H: Handler<T, B>,
+        B: Send + 'static,
+        T: 'static,
+    {
+        axum::routing::any(handler)
+    }
+
+    fn matches_method(method: &http::Method) -> bool {
+        true
+    }
+}
+
+#[async_trait]
+impl<B> FromRequest<B> for Any
+where
+    B: Send,
+{
+    type Rejection = Infallible;
+
+    async fn from_request(_: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+        Ok(Self)
+    }
+}
+
+/// TODO
+pub struct OneOf<T>(PhantomData<T>);
+
+macro_rules! one_of {
+    ($($ty:ident),* $(,)?) => {
+        impl<$($ty,)*> TypedMethod for OneOf<($($ty,)*)>
+        where
+            $( $ty: TypedMethod, )*
+        {
+            #[allow(clippy::redundant_clone, unused_mut, unused_variables)]
+            fn apply_method_router<H, B, T>(handler: H) -> MethodRouter<B>
+            where
+                H: Handler<T, B>,
+                B: Send + 'static,
+                T: 'static,
+            {
+                let mut method_router = MethodRouter::new();
+                $(
+                    method_router = method_router.merge($ty::apply_method_router(handler.clone()));
+                )*
+                method_router
+            }
+
+            #[allow(unused_variables)]
+            fn matches_method(method: &http::Method) -> bool {
+                $(
+                    if $ty::matches_method(method) {
+                        return true;
+                    }
+                )*
+                false
+            }
+        }
+
+        #[async_trait]
+        impl<B, $($ty,)*> FromRequest<B> for OneOf<($($ty,)*)>
+        where
+            B: Send,
+            $( $ty: TypedMethod + FromRequest<B>, )*
+        {
+            type Rejection = http::StatusCode;
+
+            async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+                if Self::matches_method(req.method()) {
+                    Ok(Self(PhantomData))
+                } else {
+                    Err(http::StatusCode::NOT_FOUND)
+                }
+            }
+        }
+    };
+}
+
+one_of!();
+one_of!(T1,);
+one_of!(T1, T2);
+one_of!(T1, T2, T3);
+one_of!(T1, T2, T3, T4);
+one_of!(T1, T2, T3, T4, T5);
+one_of!(T1, T2, T3, T4, T5, T6);
+one_of!(T1, T2, T3, T4, T5, T6, T7);
+one_of!(T1, T2, T3, T4, T5, T6, T7, T8);
+
+impl<T> fmt::Debug for OneOf<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("OneOf")
+            .field(&format_args!("{}", std::any::type_name::<T>()))
+            .finish()
+    }
+}
+
+impl<T> Default for OneOf<T> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
+impl<T> Clone for OneOf<T> {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+
+impl<T> Copy for OneOf<T> {}
+
 /// Utility trait used with [`RouterExt`] to ensure the first element of a tuple type is a
 /// given type.
 ///
@@ -139,18 +324,20 @@ pub trait TypedPath: std::fmt::Display {
 /// It is sealed such that it cannot be implemented outside this crate.
 ///
 /// [`RouterExt`]: super::RouterExt
-pub trait FirstElementIs<P>: Sealed {}
+pub trait FirstTwoElementsAre<M, P>: Sealed {}
 
 macro_rules! impl_first_element_is {
     ( $($ty:ident),* $(,)? ) => {
-        impl<P, $($ty,)*> FirstElementIs<P> for (P, $($ty,)*)
+        impl<M, P, $($ty,)*> FirstTwoElementsAre<M, P> for (M, P, $($ty,)*)
         where
-            P: TypedPath
+            M: TypedMethod,
+            P: TypedPath,
         {}
 
-        impl<P, $($ty,)*> Sealed for (P, $($ty,)*)
+        impl<M, P, $($ty,)*> Sealed for (M, P, $($ty,)*)
         where
-            P: TypedPath
+            M: TypedMethod,
+            P: TypedPath,
         {}
     };
 }
