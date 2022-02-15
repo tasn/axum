@@ -1,75 +1,16 @@
-use std::{convert::Infallible, fmt, marker::PhantomData};
-
+use super::sealed::Sealed;
 use axum::{
     async_trait,
     extract::{FromRequest, RequestParts},
     handler::Handler,
     routing::MethodRouter,
 };
+use std::{convert::Infallible, fmt, marker::PhantomData};
 
-use super::sealed::Sealed;
-
-/// A type safe path.
+/// A typed request path.
 ///
 /// This is used to statically connect a path to its corresponding handler using
-/// [`RouterExt::typed_get`], [`RouterExt::typed_post`], etc.
-///
-/// # Example
-///
-/// ```rust
-/// use serde::Deserialize;
-/// use axum::{Router, extract::Json};
-/// use axum_extra::routing::{
-///     TypedPath,
-///     RouterExt, // for `Router::typed_*`
-/// };
-///
-/// // A type safe route with `/users/:id` as its associated path.
-/// #[derive(TypedPath, Deserialize)]
-/// #[typed_path("/users/:id")]
-/// struct UsersMember {
-///     id: u32,
-/// }
-///
-/// // A regular handler function that takes `UsersMember` as the first argument
-/// // and thus creates a typed connection between this handler and the `/users/:id` path.
-/// //
-/// // The `TypedPath` must be the first argument to the function.
-/// async fn users_show(
-///     UsersMember { id }: UsersMember,
-/// ) {
-///     // ...
-/// }
-///
-/// let app = Router::new()
-///     // Add our typed route to the router.
-///     //
-///     // The path will be inferred to `/users/:id` since `users_show`'s
-///     // first argument is `UsersMember` which implements `TypedPath`
-///     .typed_get(users_show)
-///     .typed_post(users_create)
-///     .typed_delete(users_destroy);
-///
-/// #[derive(TypedPath)]
-/// #[typed_path("/users")]
-/// struct UsersCollection;
-///
-/// #[derive(Deserialize)]
-/// struct UsersCreatePayload { /* ... */ }
-///
-/// async fn users_create(
-///     _: UsersCollection,
-///     // Our handlers can accept other extractors.
-///     Json(payload): Json<UsersCreatePayload>,
-/// ) {
-///     // ...
-/// }
-///
-/// async fn users_destroy(_: UsersCollection) { /* ... */ }
-///
-/// #
-/// # let app: Router<axum::body::Body> = app;
-/// ```
+/// [`RouterExt::typed_route`]. See that method for more details.
 ///
 /// # Using `#[derive(TypedPath)]`
 ///
@@ -137,23 +78,31 @@ pub trait TypedPath: std::fmt::Display {
     const PATH: &'static str;
 }
 
-/// TODO
-pub trait TypedMethod {
-    /// TODO
+/// A typed HTTP method.
+///
+/// This is used to statically connect an HTTP method to its corresponding handler using
+/// [`RouterExt::typed_route`]. See that method for more details.
+///
+/// This trait is sealed such that it cannot be implemented outside this crate.
+pub trait TypedMethod: Sealed {
+    /// Wrap a handler in a [`MethodRouter`] that accepts this type's corresponding HTTP method.
     fn apply_method_router<H, B, T>(handler: H) -> MethodRouter<B>
     where
         H: Handler<T, B>,
         B: Send + 'static,
         T: 'static;
 
+    /// Check if the request matches this type's corresponding HTTP method.
     fn matches_method(method: &http::Method) -> bool;
 }
 
 macro_rules! typed_method {
     ($name:ident, $method_router_constructor:ident, $method:ident) => {
-        /// TODO(david)
+        #[doc = concat!("A `TypedMethod` that accepts `", stringify!($method), "` requests.")]
         #[derive(Clone, Copy, Debug)]
         pub struct $name;
+
+        impl Sealed for $name {}
 
         impl TypedMethod for $name {
             fn apply_method_router<H, B, T>(handler: H) -> MethodRouter<B>
@@ -197,9 +146,29 @@ typed_method!(Post, post, POST);
 typed_method!(Put, put, PUT);
 typed_method!(Trace, trace, TRACE);
 
-/// TODO
+/// A [`TypedMethod`] that accepts all HTTP methods.
+///
+/// # Example
+///
+/// ```rust
+/// use axum_extra::routing::{TypedPath, Any, RouterExt};
+/// use axum::Router;
+///
+/// #[derive(TypedPath)]
+/// #[typed_path("/foo")]
+/// struct Foo;
+///
+/// // This accepts `/foo` with any HTTP method.
+/// async fn foo(_: Any, _: Foo) {}
+///
+/// let app = Router::new().typed_route(foo);
+/// #
+/// # let app: Router<axum::body::Body> = app;
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Any;
+
+impl Sealed for Any {}
 
 impl TypedMethod for Any {
     fn apply_method_router<H, B, T>(handler: H) -> MethodRouter<B>
@@ -211,7 +180,7 @@ impl TypedMethod for Any {
         axum::routing::any(handler)
     }
 
-    fn matches_method(method: &http::Method) -> bool {
+    fn matches_method(_method: &http::Method) -> bool {
         true
     }
 }
@@ -228,7 +197,25 @@ where
     }
 }
 
-/// TODO
+/// A [`TypedMethod`] that accepts one of a number of HTTP methods.
+///
+/// # Example
+///
+/// ```rust
+/// use axum_extra::routing::{TypedPath, OneOf, Patch, Put, RouterExt};
+/// use axum::Router;
+///
+/// #[derive(TypedPath)]
+/// #[typed_path("/foo")]
+/// struct Foo;
+///
+/// // This accepts `PATCH /foo` and `PUT /foo`
+/// async fn foo(_: OneOf<(Patch, Put)>, _: Foo) {}
+///
+/// let app = Router::new().typed_route(foo);
+/// #
+/// # let app: Router<axum::body::Body> = app;
+/// ```
 pub struct OneOf<T>(PhantomData<T>);
 
 macro_rules! one_of {
@@ -261,6 +248,8 @@ macro_rules! one_of {
                 false
             }
         }
+
+        impl<$($ty,)*> Sealed for OneOf<($($ty,)*)> {}
 
         #[async_trait]
         impl<B, $($ty,)*> FromRequest<B> for OneOf<($($ty,)*)>

@@ -50,7 +50,69 @@ pub trait RouterExt<B>: sealed::Sealed {
     /// The method and path will be inferred from the first two arguments to the handler function
     /// which must implement [`TypedMethod`] and [`TypedPath`] respectively.
     ///
-    /// See [`TypedPath`] for more details and examples.
+    /// # Example
+    ///
+    /// ```rust
+    /// use serde::Deserialize;
+    /// use axum::{Router, extract::Json};
+    /// use axum_extra::routing::{
+    ///     TypedPath,
+    ///     Get,
+    ///     Post,
+    ///     Delete,
+    ///     RouterExt, // for `Router::typed_*`
+    /// };
+    ///
+    /// // A type safe route with `/users/:id` as its associated path.
+    /// #[derive(TypedPath, Deserialize)]
+    /// #[typed_path("/users/:id")]
+    /// struct UsersMember {
+    ///     id: u32,
+    /// }
+    ///
+    /// // A regular handler function that takes `Get` as its first argument and
+    /// // `UsersMember` as the second argument and thus creates a typed connection
+    /// // between this handler and `GET /users/:id`.
+    /// //
+    /// // The first argument must implement `TypedMethod` and the second must
+    /// // implement `TypedPath`.
+    /// async fn users_show(
+    ///     _: Get,
+    ///     UsersMember { id }: UsersMember,
+    /// ) {
+    ///     // ...
+    /// }
+    ///
+    /// let app = Router::new()
+    ///     // Add our typed route to the router.
+    ///     //
+    ///     // The method and path will be inferred to `GET /users/:id` since `users_show`'s
+    ///     // first argument is `Get` and the second is `UsersMember`.
+    ///     .typed_route(users_show)
+    ///     .typed_route(users_create)
+    ///     .typed_route(users_destroy);
+    ///
+    /// #[derive(TypedPath)]
+    /// #[typed_path("/users")]
+    /// struct UsersCollection;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct UsersCreatePayload { /* ... */ }
+    ///
+    /// async fn users_create(
+    ///     _: Post,
+    ///     _: UsersCollection,
+    ///     // Our handlers can accept other extractors.
+    ///     Json(payload): Json<UsersCreatePayload>,
+    /// ) {
+    ///     // ...
+    /// }
+    ///
+    /// async fn users_destroy(_: Delete, _: UsersCollection) { /* ... */ }
+    ///
+    /// #
+    /// # let app: Router<axum::body::Body> = app;
+    /// ```
     #[cfg(feature = "typed-routing")]
     fn typed_route<H, T, M, P>(self, handler: H) -> Self
     where
