@@ -30,9 +30,9 @@ use std::{convert::Infallible, fmt, marker::PhantomData};
 /// The macro expands to:
 ///
 /// - A `TypedPath` implementation.
-/// - A [`FromRequest`] implementation compatible with [`RouterExt::typed_get`],
-/// [`RouterExt::typed_post`], etc. This implementation uses [`Path`] and thus your struct must
-/// also implement [`serde::Deserialize`], unless it's a unit struct.
+/// - A [`FromRequest`] implementation compatible with [`RouterExt::typed_route`]. This
+/// implementation uses [`Path`] and thus your struct must also implement [`serde::Deserialize`],
+/// unless it's a unit struct.
 /// - A [`Display`] implementation that interpolates the captures. This can be used to, among other
 /// things, create links to known paths and have them verified statically. Note that the
 /// [`Display`] implementation for each field must return something that's compatible with its
@@ -68,8 +68,7 @@ use std::{convert::Infallible, fmt, marker::PhantomData};
 /// ```
 ///
 /// [`FromRequest`]: axum::extract::FromRequest
-/// [`RouterExt::typed_get`]: super::RouterExt::typed_get
-/// [`RouterExt::typed_post`]: super::RouterExt::typed_post
+/// [`RouterExt::typed_route`]: super::RouterExt::typed_route
 /// [`Path`]: axum::extract::Path
 /// [`Display`]: std::fmt::Display
 /// [`Deserialize`]: serde::Deserialize
@@ -84,6 +83,8 @@ pub trait TypedPath: std::fmt::Display {
 /// [`RouterExt::typed_route`]. See that method for more details.
 ///
 /// This trait is sealed such that it cannot be implemented outside this crate.
+///
+/// [`RouterExt::typed_route`]: super::RouterExt::typed_route
 pub trait TypedMethod: Sealed {
     /// Wrap a handler in a [`MethodRouter`] that accepts this type's corresponding HTTP method.
     fn apply_method_router<H, B, T>(handler: H) -> MethodRouter<B>
